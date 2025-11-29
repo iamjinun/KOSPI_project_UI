@@ -162,6 +162,7 @@ def predict_simulation(model, df, seq_len, device, target_start_date):
                     break
             
             next_price = base + pred_deltas[i]
+            if next_price < 1: next_price = 1
             temp_dates.append(current_date)
             temp_prices.append(next_price)
             base = next_price
@@ -234,7 +235,11 @@ def main():
 
     with st.spinner("최신 시장 데이터 동기화 중..."):
         seq_len = 30
-        df_init, _ = get_market_data(seq_len)
+        if 'market_data' not in st.session_state:
+            df_init, _ = get_market_data(seq_len)
+            st.session_state['market_data'] = df_init
+        else:
+            df_init = st.session_state['market_data']
         
         if df_init is None or df_init.empty:
             st.error("데이터 로드 실패")
@@ -246,7 +251,6 @@ def main():
         st.header("설정 (Settings)")
         st.write(f"**데이터 기준일:** {last_real_date.strftime('%Y-%m-%d (%a)')}")
         
-        # 선택 가능 범위 설정: [기준일+1일] ~ [기준일+30일]
         min_start_date = last_real_date + timedelta(days=1)
         max_start_date = last_real_date + timedelta(days=30)
         
@@ -278,82 +282,102 @@ def main():
         
         st.success(f"**실제 예측 구간**\n\n{start_str} ~ {end_str}")
         
+    if 'pred_results' not in st.session_state:
+        st.session_state['pred_results'] = None
+    
+    if 'last_selected_date' not in st.session_state:
+        st.session_state['last_selected_date'] = selected_date
+        
+    if st.session_state['last_selected_date'] != selected_date:
+        st.session_state['pred_results'] = None
+        st.session_state['last_selected_date'] = selected_date
+
     if st.button("예측 실행 (Start Prediction)"):
         with st.spinner('AI 분석 및 예측 수행 중...'):
-            
             all_dates, all_prices, _, real_start_dt = predict_simulation(
                 model, df_init, seq_len, device, selected_date
             )
+            st.session_state['pred_results'] = {
+                'all_dates': all_dates,
+                'all_prices': all_prices,
+                'real_start_dt': real_start_dt
+            }
 
-            final_dates_tbl = []
-            final_prices_tbl = []
-            
-            for d, p in zip(all_dates, all_prices):
-                if d >= real_start_dt:
-                    final_dates_tbl.append(d)
-                    final_prices_tbl.append(p)
-                    if len(final_dates_tbl) == 5: 
-                        break
-            
-            if final_dates_tbl:
-                plot_end_date = final_dates_tbl[-1]
-            else:
-                plot_end_date = all_dates[-1]
-            
-            plot_dates = []
-            plot_prices = []
-            
-            for d, p in zip(all_dates, all_prices):
-                plot_dates.append(d)
-                plot_prices.append(p)
-                if d >= plot_end_date:
+    if st.session_state['pred_results'] is not None:
+        results = st.session_state['pred_results']
+        all_dates = results['all_dates']
+        all_prices = results['all_prices']
+        real_start_dt = results['real_start_dt']
+
+        final_dates_tbl = []
+        final_prices_tbl = []
+        
+        for d, p in zip(all_dates, all_prices):
+            if d >= real_start_dt:
+                final_dates_tbl.append(d)
+                final_prices_tbl.append(p)
+                if len(final_dates_tbl) == 5: 
                     break
+        
+        if final_dates_tbl:
+            plot_end_date = final_dates_tbl[-1]
+        else:
+            plot_end_date = all_dates[-1]
+        
+        plot_dates = []
+        plot_prices = []
+        
+        for d, p in zip(all_dates, all_prices):
+            plot_dates.append(d)
+            plot_prices.append(p)
+            if d >= plot_end_date:
+                break
 
-            fig = go.Figure()
+        fig = go.Figure()
 
-            display_df = df_init.iloc[-60:]
-            fig.add_trace(go.Scatter(
-                x=display_df.index, 
-                y=display_df["KOSPI_Close"],
-                mode='lines',
-                name='실제 데이터 (History)',
-                line=dict(color='black', width=2)
-            ))
+        display_df = df_init.iloc[-60:]
+        fig.add_trace(go.Scatter(
+            x=display_df.index, 
+            y=display_df["KOSPI_Close"],
+            mode='lines',
+            name='실제 데이터 (History)',
+            line=dict(color='black', width=2)
+        ))
 
-            connect_x = [display_df.index[-1]] + plot_dates
-            connect_y = [display_df["KOSPI_Close"].iloc[-1]] + plot_prices
+        connect_x = [display_df.index[-1]] + plot_dates
+        connect_y = [display_df["KOSPI_Close"].iloc[-1]] + plot_prices
 
-            fig.add_trace(go.Scatter(
-                x=connect_x, 
-                y=connect_y,
-                mode='lines+markers',
-                name='AI 예측 경로',
-                line=dict(color='#FF4136', width=2, dash='dot'),
-                marker=dict(size=5)
-            ))
+        fig.add_trace(go.Scatter(
+            x=connect_x, 
+            y=connect_y,
+            mode='lines+markers',
+            name='AI 예측 경로',
+            line=dict(color='#FF4136', width=2, dash='dot'),
+            marker=dict(size=5)
+        ))
 
-            title_date_str = real_start_dt.strftime('%Y-%m-%d')
-            fig.update_layout(
-                title=f"KOSPI 주가 예측 시뮬레이션 (Target: {title_date_str})",
-                xaxis_title="날짜",
-                yaxis_title="주가 (KRW)",
-                template="plotly_white",
-                hovermode="x unified",
-                autosize=True
-            )
-            st.plotly_chart(fig, config={'responsive': True})
+        title_date_str = real_start_dt.strftime('%Y-%m-%d')
+        fig.update_layout(
+            title=f"KOSPI 주가 예측 시뮬레이션 (Target: {title_date_str})",
+            xaxis_title="날짜",
+            yaxis_title="주가 (KRW)",
+            template="plotly_white",
+            hovermode="x unified",
+            autosize=True
+        )
+        st.plotly_chart(fig, config={'responsive': True})
 
-            st.subheader(f"{title_date_str} 부터 5일간 예측 결과")
-            
-            res_df = pd.DataFrame({
-                "날짜": [d.strftime("%Y-%m-%d (%a)") for d in final_dates_tbl],
-                "예측 주가": [f"{p:,.0f} 원" for p in final_prices_tbl]
-            })
-            
-            if not res_df.empty:
-                st.table(res_df)
-            else:
-                st.warning("해당 구간의 예측 결과를 생성하지 못했습니다.")
+        st.subheader(f"{title_date_str} 부터 5일간 예측 결과")
+        
+        res_df = pd.DataFrame({
+            "날짜": [d.strftime("%Y-%m-%d (%a)") for d in final_dates_tbl],
+            "예측 주가": [f"{p:,.0f} 원" for p in final_prices_tbl]
+        })
+        
+        if not res_df.empty:
+            st.table(res_df)
+        else:
+            st.warning("해당 구간의 예측 결과를 생성하지 못했습니다.")
 
 if __name__ == "__main__":
     main()
